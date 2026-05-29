@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Aplicación web interactiva de visualización de audio en tiempo real con síntesis audiovisual">
+  <meta name="author" content="Vidal Rico">
+  <meta name="theme-color" content="#001903">
+  
+  <title>Audio Reactivo - Visualización de Audio en Tiempo Real</title>
+  
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23001903'/><circle cx='50' cy='50' r='35' fill='%2319ff87'/><circle cx='50' cy='50' r='20' fill='%23001903'/></svg>">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+
+<body>
+  <header class="header" role="banner">
+    <nav class="nav-controls">
+      <h1>ATOMO</h1>
+      <p class="subtitle">[ VISUALIZACION AUDIOVISUAL ]</p>
+    </nav>
+  </header>
+
+  <main class="main-content">
+    <section id="canvas-container" class="canvas-wrapper" role="region" aria-label="Visualización de audio">
+      <!-- Canvas renderizado por p5.js -->
+    </section>
+    
+    <aside class="info-panel" role="complementary">
+      <div class="controls-info">
+        <h2>CONTROLES</h2>
+        <ul>
+          <li><strong>CLICK</strong>: Play / Pause</li>
+          <li><strong>ARRASTRA</strong>: Rotar vista 3D</li>
+          <li><strong>ESPACIO</strong>: Play / Pause</li>
+          <li><strong>DESLIZA</strong>: Ajusta parametros</li>
+        </ul>
+      </div>
+
+      <div class="status-info">
+        <h2>ESTADO</h2>
+        <div id="song-status" style="color: #82ffeb; font-size: 1rem; margin-top: 0.5rem;">
+          [ INICIALIZANDO ]
+        </div>
+        <div id="song-time" style="color: #19ff87; font-size: 1.1rem; margin-top: 0.5rem; font-weight: bold;">
+          00:00 / 00:00
+        </div>
+      </div>
+
+      <div class="params-info">
+        <h2>PARAMETROS</h2>
+        <div class="param-slider">
+          <label>DISTORSION</label>
+          <input type="range" id="distortion-slider" class="slider" min="0.5" max="5" step="0.1" value="1.8">
+          <span id="distortion-val" class="param-value">1.80</span>
+        </div>
+        <div class="param-slider">
+          <label>TAMANO</label>
+          <input type="range" id="size-slider" class="slider" min="0.65" max="1.7" step="0.05" value="1.02">
+          <span id="size-val" class="param-value">1.02</span>
+        </div>
+        <div class="param-slider">
+          <label>ORBITAS</label>
+          <input type="range" id="rays-slider" class="slider" min="0.45" max="2.4" step="0.05" value="1.18">
+          <span id="rays-val" class="param-value">1.18</span>
+        </div>
+        <div class="param-slider">
+          <label>MALLA</label>
+          <input type="range" id="core-slider" class="slider" min="0" max="1" step="0.05" value="0.58">
+          <span id="core-val" class="param-value">0.58</span>
+        </div>
+        <div class="param-slider">
+          <label>VELOCIDAD</label>
+          <input type="range" id="speed-slider" class="slider" min="0.5" max="2" step="0.1" value="1">
+          <span id="speed-val" class="param-value">1.00x</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="footer" role="contentinfo">
+    <p>&copy; 2026 Audio Reactivo. Visualización audiovisual interactiva con p5.js y Web Audio API.</p>
+  </footer>
+
+  <!-- Librerías p5.js y extensiones de audio -->
+  <script src="../js/p5/p5.min.js" crossorigin="anonymous"></script>
+  <script src="../js/p5/addons/p5.sound.min.js" crossorigin="anonymous"></script>
+
+  <!-- Script principal de la aplicación -->
+  <script src="../js/amplitude.js" defer></script>
+
+  <!-- Script para actualizar parámetros dinámicos en UI -->
+  <script>
+    // Conectar sliders con las variables de amplitude.js
+    document.getElementById('distortion-slider').addEventListener('input', function(e) {
+      if (typeof distortionAmount !== 'undefined') {
+        distortionAmount = parseFloat(e.target.value);
+        updateAudioDistortion();
+        document.getElementById('distortion-val').textContent = distortionAmount.toFixed(2);
+      }
+    });
+
+    document.getElementById('size-slider').addEventListener('input', function(e) {
+      if (typeof visualSize !== 'undefined') {
+        visualSize = parseFloat(e.target.value);
+        document.getElementById('size-val').textContent = visualSize.toFixed(2);
+      }
+    });
+
+    document.getElementById('rays-slider').addEventListener('input', function(e) {
+      if (typeof rayIntensity !== 'undefined') {
+        rayIntensity = parseFloat(e.target.value);
+        document.getElementById('rays-val').textContent = rayIntensity.toFixed(2);
+      }
+    });
+
+    document.getElementById('core-slider').addEventListener('input', function(e) {
+      if (typeof coreDensity !== 'undefined') {
+        coreDensity = parseFloat(e.target.value);
+        document.getElementById('core-val').textContent = coreDensity.toFixed(2);
+      }
+    });
+
+    document.getElementById('speed-slider').addEventListener('input', function(e) {
+      if (typeof song !== 'undefined' && song) {
+        playbackRate = parseFloat(e.target.value);
+        song.rate(playbackRate);
+        document.getElementById('speed-val').textContent = playbackRate.toFixed(2) + 'x';
+      }
+    });
+
+    function updateUIParameters() {
+      if (typeof distortionAmount !== 'undefined') {
+        // Sincronizar sliders con valores actuales
+        document.getElementById('distortion-slider').value = distortionAmount;
+        document.getElementById('size-slider').value = visualSize;
+        document.getElementById('rays-slider').value = rayIntensity;
+        document.getElementById('core-slider').value = coreDensity;
+        document.getElementById('speed-slider').value = playbackRate;
+        
+        let statusText = '[ INICIALIZANDO ]';
+        if (typeof loadError !== 'undefined' && loadError) {
+          statusText = '[ ERROR CARGA ]';
+        } else if (typeof songReady !== 'undefined' && songReady) {
+          statusText = typeof song !== 'undefined' && song.isPlaying() ? '[ REPRODUCIENDO ]' : '[ PAUSADO ]';
+        }
+        document.getElementById('song-status').textContent = statusText;
+        
+        if (typeof song !== 'undefined' && song && song.duration) {
+          const current = Math.floor(song.currentTime());
+          const duration = Math.floor(song.duration());
+          const currentMin = Math.floor(current / 60);
+          const currentSec = current % 60;
+          const durationMin = Math.floor(duration / 60);
+          const durationSec = duration % 60;
+          document.getElementById('song-time').textContent = 
+            `${String(currentMin).padStart(2, '0')}:${String(currentSec).padStart(2, '0')} / ${String(durationMin).padStart(2, '0')}:${String(durationSec).padStart(2, '0')}`;
+        }
+      }
+      requestAnimationFrame(updateUIParameters);
+    }
+    updateUIParameters();
+  </script>
+</body>
+</html>
