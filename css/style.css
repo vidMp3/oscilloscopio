@@ -24,6 +24,28 @@ body {
   font-weight: 400;
 }
 
+/* Fondo de grid 3D ciberpunk */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(0deg, transparent 24%, rgba(25, 255, 135, 0.08) 25%, rgba(25, 255, 135, 0.08) 26%, transparent 27%, transparent 74%, rgba(25, 255, 135, 0.08) 75%, rgba(25, 255, 135, 0.08) 76%, transparent 77%, transparent),
+    linear-gradient(90deg, transparent 24%, rgba(25, 255, 135, 0.08) 25%, rgba(25, 255, 135, 0.08) 26%, transparent 27%, transparent 74%, rgba(25, 255, 135, 0.08) 75%, rgba(25, 255, 135, 0.08) 76%, transparent 77%, transparent);
+  background-size: 60px 60px;
+  pointer-events: none;
+  z-index: 0;
+  animation: grid-drift 20s linear infinite;
+}
+
+@keyframes grid-drift {
+  0% { background-position: 0 0; }
+  100% { background-position: 60px 60px; }
+}
+
 /* ==========================================
    LAYOUT PRINCIPAL
    ========================================== */
