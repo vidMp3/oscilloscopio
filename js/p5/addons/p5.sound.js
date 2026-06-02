@@ -1208,7 +1208,10 @@ p5.prototype.registerMethod('init', function () {
     this._decrementPreload();
   }.bind(this);
 
-  loadAudioWorkletModules().then(onWorkletModulesLoad);
+  loadAudioWorkletModules().then(onWorkletModulesLoad).catch(function (err) {
+    console.warn('p5.sound: AudioWorklet modules could not be loaded; continuing sketch startup.', err);
+    onWorkletModulesLoad();
+  });
 });
 function panner_classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 

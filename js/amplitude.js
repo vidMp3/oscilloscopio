@@ -1,4 +1,5 @@
 const AUDIO_PATH = "audio/Snow Strippers Aching Like It s Official Video.mp3";
+const DEFAULT_AUDIO_NAME = AUDIO_PATH.split('/').pop();
 const MAX_HISTORY = 560;
 const FFT_BINS = 512;
 const SPHERE_ROWS = 44;
@@ -6,6 +7,12 @@ const SPHERE_COLS = 96;
 const EMPTY_WAVEFORM = new Array(FFT_BINS).fill(0);
 const EMPTY_SPECTRUM = new Array(FFT_BINS).fill(0);
 const ROTOSCOPE_FRAME_HOLD = 4;
+
+// Visual styles
+const SCENE_PRESETS = ["ATOMO", "MINIMAL"];
+const VISUAL_STYLES = SCENE_PRESETS;
+let visualStyleIndex = 0;
+let scenePresetIndex = 0;
 
 const DISTORTION_MODES = ["NORMAL", "HARD_CLIP", "SOFT_CLIP", "WAVEFOLD"];
 const WAVE_COLORS = {
@@ -30,11 +37,19 @@ let history = [];
 let isSeeking = false;
 let isChangingSpeed = false;
 let playbackRate = 1;
+let pendingSeekTime = 0;
 let distortionModeIndex = 3;
 let distortionAmount = 1.8;
 let visualSize = 1.02;
 let rayIntensity = 1.18;
 let coreDensity = 0.58;
+let roomTempoSensitivity = 1;
+let roomHeartbeat = 0;
+let roomBeatAverage = 0;
+let roomBeatPrevious = 0;
+let roomBeatPulse = 0;
+let roomBeatCooldown = 0;
+let autoCameraPulse = 0;
 let autoRotation = 0;
 let sphereRotationX = -0.18;
 let sphereRotationY = 0;
@@ -44,20 +59,6 @@ let pointerStartedOnControl = false;
 let pointerMoved = false;
 let activeVisualControl = null;
 let parameterOverlay;
-
-function preload() {
-  soundFormats("mp3");
-
-  song = loadSound(
-    getAssetPath(AUDIO_PATH),
-    () => {
-      songReady = true;
-    },
-    () => {
-      loadError = true;
-    }
-  );
-}
 
 function setup() {
   pixelDensity(1);
@@ -72,8 +73,285 @@ function setup() {
   fft = new p5.FFT(0.35, FFT_BINS);
   fft.setInput(audioOutput);
 
-  amplitude = new p5.Amplitude();
-  amplitude.setInput(audioOutput);
+  amplitude = createAmplitudeAnalyzer(audioOutput);
+
+  initFileDropzone();
+  loadDefaultAudio();
+}
+
+function createAmplitudeAnalyzer(input) {
+  try {
+    const analyzer = new p5.Amplitude();
+    analyzer.setInput(input);
+    return analyzer;
+  } catch (error) {
+    console.warn('No se pudo iniciar p5.Amplitude; el visual usara nivel 0 como fallback.', error);
+    return {
+      getLevel: () => 0,
+      setInput: () => {}
+    };
+  }
+}
+
+function loadDefaultAudio() {
+  soundFormats("mp3");
+  songReady = false;
+  loadError = false;
+
+  const audioPath = getAssetPath(AUDIO_PATH);
+
+  song = loadSound(
+    audioPath,
+    () => {
+      songReady = true;
+      loadError = false;
+      pendingSeekTime = 0;
+      setupAudioChain();
+
+      if (fft) {
+        fft.setInput(audioOutput);
+      }
+
+      if (amplitude) {
+        amplitude.setInput(audioOutput);
+      }
+
+      setCurrentFileName(DEFAULT_AUDIO_NAME);
+      showFileFeedback('Archivo actual: ' + DEFAULT_AUDIO_NAME);
+    },
+    (error) => {
+      songReady = false;
+      loadError = true;
+      console.error('No se pudo cargar el audio por defecto:', audioPath, error);
+      showFileFeedback('No se pudo cargar el MP3 por defecto. Arrastra un archivo .mp3 para continuar.');
+    }
+  );
+}
+
+function initFileDropzone() {
+  const dropzone = document.getElementById('audio-dropzone');
+  const fileInput = document.getElementById('audio-file-input');
+  if (!dropzone || !fileInput) {
+    return;
+  }
+
+  const setDropzoneActive = (active) => {
+    dropzone.classList.toggle('file-dropzone--active', active);
+  };
+
+  const preventDefaults = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleFiles = (files) => {
+    if (!files || files.length === 0) {
+      return;
+    }
+    console.log('handleFiles received', files[0] && files[0].name, files[0]);
+    loadAudioFile(files[0]);
+  };
+
+  const handleDrop = (event) => {
+    preventDefaults(event);
+    setDropzoneActive(false);
+    console.log('drop event', event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
+    handleFiles(event.dataTransfer.files);
+  };
+
+  fileInput.addEventListener('change', (event) => {
+    handleFiles(event.target.files);
+  });
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      fileInput.click();
+    }
+  });
+  dropzone.addEventListener('dragenter', (event) => {
+    preventDefaults(event);
+    setDropzoneActive(true);
+  });
+  dropzone.addEventListener('dragover', (event) => {
+    preventDefaults(event);
+    setDropzoneActive(true);
+  });
+  dropzone.addEventListener('dragleave', (event) => {
+    preventDefaults(event);
+    setDropzoneActive(false);
+  });
+  dropzone.addEventListener('drop', handleDrop);
+
+  // Prevent page scroll when pressing Space if focus is not on UI.
+  document.addEventListener('keydown', (e) => {
+    const isSpace = e.code === 'Space' || e.key === ' ';
+    if (!isSpace) return;
+    try {
+      const tgt = e.target || document.activeElement;
+      const tag = tgt && tgt.tagName;
+      const inUI = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') || (tgt.closest && (tgt.closest('.info-panel') || tgt.closest('.file-drop-section')));
+      // If the event target is a UI control, don't prevent or interfere.
+      if (!inUI) {
+        e.preventDefault();
+        // allow propagation so p5's keyPressed receives it
+      }
+    } catch (err) {
+      // ignore
+    }
+  }, { passive: false });
+
+  setCurrentFileName(DEFAULT_AUDIO_NAME);
+}
+
+function loadAudioFile(file) {
+  const lowerName = file.name.toLowerCase();
+  if (!file.type.startsWith('audio/') && !lowerName.endsWith('.mp3')) {
+    showFileFeedback('Solo se permite un archivo MP3 válido.');
+    return;
+  }
+
+  songReady = false;
+  loadError = false;
+  const previousSong = song;
+  const previousPlaying = previousSong && previousSong.isPlaying();
+  const fileURL = URL.createObjectURL(file);
+
+  console.log('Loading audio file (via FileReader):', file.name, file.type);
+
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const arrayBuffer = evt.target.result;
+    const ctx = getAudioContext();
+    const decodePromise = ctx.decodeAudioData ? ctx.decodeAudioData(arrayBuffer) : new Promise((resolve, reject) => ctx.decodeAudioData(arrayBuffer, resolve, reject));
+    decodePromise.then((audioBuffer) => {
+      try {
+        if (previousSong && previousPlaying) {
+          try { previousSong.stop(); } catch (e) {}
+        }
+        if (previousSong && previousSong.disconnect) {
+          try { previousSong.disconnect(); } catch (e) {}
+        }
+      } catch (e) {}
+
+      // convert AudioBuffer channels to array of Float32Array
+      const channels = [];
+      for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+        const data = audioBuffer.getChannelData(c);
+        channels.push(new Float32Array(data));
+      }
+
+      // create a new p5.SoundFile and set buffer
+      try {
+        const sFile = new p5.SoundFile();
+        sFile.setBuffer(channels);
+        song = sFile;
+      } catch (e) {
+        console.error('Error creating p5.SoundFile:', e);
+        showFileFeedback('Error interno al procesar el MP3.');
+        song = previousSong;
+        return;
+      }
+
+      try { setupAudioChain(); } catch (e) { console.warn('setupAudioChain failed:', e); }
+      playbackRate = 1;
+      pendingSeekTime = 0;
+      try { song.rate(playbackRate); } catch (e) {}
+
+      // Reconnect analyzers to the current audio output so visuals react
+      try {
+        if (typeof fft !== 'undefined' && fft) {
+          fft.setInput(audioOutput);
+        } else {
+          fft = new p5.FFT(0.35, FFT_BINS);
+          fft.setInput(audioOutput);
+        }
+      } catch (e) {
+        console.warn('Could not set FFT input after load:', e);
+      }
+
+      try {
+        if (typeof amplitude !== 'undefined' && amplitude) {
+          amplitude.setInput(audioOutput);
+        } else {
+          amplitude = createAmplitudeAnalyzer(audioOutput);
+        }
+      } catch (e) {
+        console.warn('Could not set Amplitude input after load:', e);
+      }
+
+      songReady = true;
+      setCurrentFileName(file.name);
+      showFileFeedback('Archivo cargado: ' + file.name + ' — pulsa Space o haz clic sobre el canvas para reproducir');
+      syncDOMControls();
+
+      // reset file input so same file can be selected again
+      const fileInput = document.getElementById('audio-file-input');
+      if (fileInput) fileInput.value = '';
+    }).catch((err) => {
+      loadError = true;
+      const msg = (err && err.message) ? err.message : JSON.stringify(err);
+      showFileFeedback('Error al decodificar el MP3: ' + msg);
+      console.error('decodeAudioData error:', err);
+      song = previousSong;
+    });
+  };
+
+  reader.onerror = function(err) {
+    loadError = true;
+    showFileFeedback('Error leyendo el archivo.');
+    console.error('FileReader error:', err);
+    song = previousSong;
+  };
+
+  reader.readAsArrayBuffer(file);
+
+  return null;
+}
+
+function setCurrentFileName(name) {
+  const currentFileName = document.getElementById('current-file-name');
+  if (currentFileName) {
+    currentFileName.textContent = name;
+  }
+}
+
+function showFileFeedback(message) {
+  const feedback = document.getElementById('dropzone-feedback');
+  if (feedback) {
+    feedback.textContent = message;
+  }
+}
+
+function syncDOMControls() {
+  const controls = [
+    ["distortion-slider", "distortion-val", distortionAmount, "", 2],
+    ["size-slider", "size-val", visualSize, "", 2],
+    ["rays-slider", "rays-val", rayIntensity, "", 2],
+    ["room-tempo-slider", "room-tempo-val", roomTempoSensitivity, "", 2],
+    ["core-slider", "core-val", coreDensity, "", 2],
+    ["speed-slider", "speed-val", playbackRate, "x", 2]
+  ];
+
+  controls.forEach(([sliderId, valueId, value, suffix, decimals]) => {
+    const slider = document.getElementById(sliderId);
+    const valueLabel = document.getElementById(valueId);
+
+    if (slider) {
+      slider.value = value;
+    }
+
+    if (valueLabel) {
+      valueLabel.textContent = value.toFixed(decimals) + suffix;
+    }
+  });
+
+  const presetButtons = document.querySelectorAll('[data-scene-preset]');
+  presetButtons.forEach((button) => {
+    const active = Number(button.dataset.scenePreset) === scenePresetIndex;
+    button.classList.toggle('preset-button--active', active);
+  });
 }
 
 function draw() {
@@ -98,8 +376,10 @@ function setupAudioChain() {
   audioShaper.oversample = "4x";
   audioOutput.gain.value = 0.78;
 
-  song.disconnect();
-  song.connect(audioInput);
+  if (song && song.disconnect && song.connect) {
+    song.disconnect();
+    song.connect(audioInput);
+  }
 
   audioInput.connect(dryGain);
   audioInput.connect(audioShaper);
@@ -136,19 +416,163 @@ function drawBezel() {
   line(width - 118, height * 0.28, width - 118, height);
 }
 
+function drawRoomGrid(level, spectrum) {
+  push();
+
+  const cols = 10;
+  const rows = 8;
+  const lowBeat = getBandEnergy(spectrum, 0, 110) / 255;
+  const midBeat = getBandEnergy(spectrum, 110, 260) / 255;
+  const beatEnergy = constrain(lowBeat * 0.82 + midBeat * 0.42 + level * 0.9, 0, 1);
+  const adaptiveOnset = beatEnergy - roomBeatAverage;
+  const instantRise = beatEnergy - roomBeatPrevious;
+  const onset = max(adaptiveOnset, instantRise * 1.35);
+  const threshold = map(constrain(roomBeatAverage, 0, 0.5), 0, 0.5, 0.026, 0.052);
+
+  roomBeatAverage = lerp(roomBeatAverage, beatEnergy, 0.028);
+  roomBeatCooldown = max(0, roomBeatCooldown - 1);
+
+  if (onset > threshold && roomBeatCooldown === 0) {
+    roomBeatPulse = constrain(onset * 10.5 + beatEnergy * 0.62, 0.5, 1);
+    roomBeatCooldown = 5;
+  }
+
+  roomBeatPrevious = beatEnergy;
+  roomBeatPulse *= 0.82;
+
+  const energyPulse = pow(beatEnergy, 1.35) * 0.38;
+  const targetPulse = max(roomBeatPulse, energyPulse);
+
+  roomHeartbeat = lerp(roomHeartbeat, targetPulse, targetPulse > roomHeartbeat ? 0.74 : 0.18);
+
+  const pulse = pow(roomHeartbeat, 1.08) * constrain(roomTempoSensitivity, 0, 2);
+  const glowPulse = pow(roomBeatPulse, 1.05) * constrain(roomTempoSensitivity, 0, 2);
+  const expansion = 1 + pulse * 0.16;
+  const depthExpansion = 1 + pulse * 0.22;
+  const roomW = width * 1.1 * expansion;
+  const roomH = height * 1.1 * expansion;
+  const depth = 900 * depthExpansion;
+  const frontDepth = depth * 0.3;
+  const alpha = 55 + level * 70 + pulse * 190;
+
+  translate(0, 0, pulse * 88);
+  scale(1 + pulse * 0.035);
+
+  stroke(0, 210 + lowBeat * 45, 180 + midBeat * 55, alpha);
+  strokeWeight(0.75 + pulse * 2.5);
+  noFill();
+
+  // PISO
+  for (let i = 0; i <= cols; i++) {
+    const x = map(i, 0, cols, -roomW / 2, roomW / 2);
+    line(x, roomH / 2, -depth, x, roomH / 2, frontDepth);
+  }
+  for (let i = 0; i <= rows; i++) {
+    const z = map(i, 0, rows, -depth, frontDepth);
+    stroke(0, 210 + lowBeat * 45, 180 + midBeat * 55, alpha * map(i, 0, rows, 1.2, 0.7));
+    line(-roomW / 2, roomH / 2, z, roomW / 2, roomH / 2, z);
+  }
+
+  // TECHO
+  for (let i = 0; i <= cols; i++) {
+    const x = map(i, 0, cols, -roomW / 2, roomW / 2);
+    line(x, -roomH / 2, -depth, x, -roomH / 2, frontDepth);
+  }
+  for (let i = 0; i <= rows; i++) {
+    const z = map(i, 0, rows, -depth, frontDepth);
+    stroke(0, 210 + lowBeat * 45, 180 + midBeat * 55, alpha * map(i, 0, rows, 1.1, 0.65));
+    line(-roomW / 2, -roomH / 2, z, roomW / 2, -roomH / 2, z);
+  }
+
+  // PARED IZQUIERDA
+  for (let i = 0; i <= rows; i++) {
+    const y = map(i, 0, rows, -roomH / 2, roomH / 2);
+    stroke(0, 210 + lowBeat * 45, 180 + midBeat * 55, alpha * 0.88);
+    line(-roomW / 2, y, -depth, -roomW / 2, y, frontDepth);
+  }
+  for (let i = 0; i <= rows; i++) {
+    const z = map(i, 0, rows, -depth, frontDepth);
+    line(-roomW / 2, -roomH / 2, z, -roomW / 2, roomH / 2, z);
+  }
+
+  // PARED DERECHA
+  for (let i = 0; i <= rows; i++) {
+    const y = map(i, 0, rows, -roomH / 2, roomH / 2);
+    line(roomW / 2, y, -depth, roomW / 2, y, frontDepth);
+  }
+  for (let i = 0; i <= rows; i++) {
+    const z = map(i, 0, rows, -depth, frontDepth);
+    line(roomW / 2, -roomH / 2, z, roomW / 2, roomH / 2, z);
+  }
+
+  // PARED DEL FONDO
+  for (let i = 0; i <= cols; i++) {
+    const x = map(i, 0, cols, -roomW / 2, roomW / 2);
+    stroke(0, 245, 160 + lowBeat * 80, alpha + pulse * 110);
+    line(x, -roomH / 2, -depth, x, roomH / 2, -depth);
+  }
+  for (let i = 0; i <= rows; i++) {
+    const y = map(i, 0, rows, -roomH / 2, roomH / 2);
+    line(-roomW / 2, y, -depth, roomW / 2, y, -depth);
+  }
+
+  if (pulse > 0.025) {
+    push();
+    translate(0, 0, -depth);
+    rectMode(CENTER);
+    noFill();
+
+    for (let ring = 0; ring < 3; ring++) {
+      const ringPulse = pulse * (1 + ring * 0.36);
+      stroke(130, 255, 235, glowPulse * (120 - ring * 28));
+      strokeWeight(1 + pulse * (3.2 - ring * 0.45));
+      rect(
+        0,
+        0,
+        roomW * (0.32 + ringPulse * 0.18),
+        roomH * (0.23 + ringPulse * 0.14)
+      );
+    }
+
+    stroke(0, 255, 112, glowPulse * 170);
+    strokeWeight(0.8 + pulse * 2.4);
+    line(-roomW * 0.22, 0, roomW * 0.22, 0);
+    line(0, -roomH * 0.16, 0, roomH * 0.16);
+    pop();
+  }
+
+  pop();
+}
+
 function drawScene(waveform, spectrum, level) {
   autoRotation += map(level, 0, 0.35, 0.004, 0.018, true);
+  const cameraTarget = constrain(roomHeartbeat * 0.9 + level * 1.4, 0, 1);
+
+  autoCameraPulse = lerp(autoCameraPulse, cameraTarget, cameraTarget > autoCameraPulse ? 0.24 : 0.07);
 
   ambientLight(20, 35, 45);
   pointLight(60, 255, 165, -width * 0.25, -height * 0.35, 320);
   pointLight(70, 165, 255, width * 0.28, height * 0.18, 260);
 
+  push();
+  const slowBreath = sin(frameCount * 0.012) * 0.018;
+  const cameraZoom = 1 + slowBreath + autoCameraPulse * 0.055;
+  const cameraDepth = sin(frameCount * 0.009) * 18 + autoCameraPulse * 82;
+
+  translate(0, 0, cameraDepth);
+  scale(cameraZoom);
+  rotateX(sin(frameCount * 0.006) * 0.018 + autoCameraPulse * 0.012);
+  rotateY(sin(frameCount * 0.004) * 0.024);
+
   drawStarField(level);
+  drawRoomGrid(level, spectrum);
 
   push();
   rotateX(sphereRotationX + sin(frameCount * 0.006) * 0.035);
   rotateY(sphereRotationY + autoRotation);
   drawEnergyField(waveform, spectrum, level);
+  pop();
+
   pop();
 }
 
@@ -249,9 +673,9 @@ function drawStarField(level) {
 }
 
 function drawEnergyField(waveform, spectrum, level) {
-  if (!songReady || waveform.length === 0) {
-    drawIdleField();
-    return;
+  // Always draw the energy field (use EMPTY_WAVEFORM when no song loaded)
+  if (!waveform || waveform.length === 0) {
+    waveform = EMPTY_WAVEFORM;
   }
 
   const baseRadius = min(width, height) * 0.24 * visualSize;
@@ -259,6 +683,11 @@ function drawEnergyField(waveform, spectrum, level) {
   const bass = getBandEnergy(spectrum, 0, 90) / 255;
   const mid = getBandEnergy(spectrum, 90, 240) / 255;
   const high = getBandEnergy(spectrum, 240, FFT_BINS) / 255;
+
+  if (visualStyleIndex === 1) {
+    drawMinimalAtom(waveform, baseRadius, pulse, bass, mid, high, level);
+    return;
+  }
 
   noFill();
   blendMode(ADD);
@@ -290,6 +719,484 @@ function drawIdleField() {
   drawRotoscopeAtom(EMPTY_WAVEFORM, baseRadius, 0, 0, 0, 0, 0);
 
   blendMode(BLEND);
+  pop();
+}
+
+function drawTunnelPreset(waveform, baseRadius, pulse, bass, mid, high, level) {
+  push();
+  noFill();
+  blendMode(ADD);
+
+  const beat = constrain(roomHeartbeat + bass * 0.35, 0, 1);
+  const rings = 24 + floor(rayIntensity * 10);
+  const segments = 96;
+  const tunnelDepth = 1600;
+  const travel = (frameCount * (4.2 + playbackRate * 1.5)) % (tunnelDepth / rings);
+  const twist = frameCount * 0.006 + beat * 0.16;
+
+  drawingContext.shadowBlur = 34;
+  drawingContext.shadowColor = "rgba(0,255,140,0.9)";
+
+  rotateZ(sin(frameCount * 0.006) * 0.06);
+
+  for (let ring = 0; ring < rings; ring++) {
+    const z = -ring * (tunnelDepth / rings) + travel;
+    const depthFade = pow(map(ring, 0, rings - 1, 1, 0.14), 0.88);
+    const gate = ring % 4 === 0 ? 1.22 : 1;
+    const radius = baseRadius * (0.5 + ring * 0.058) * gate + beat * 52;
+    const yScale = 0.52 + sin(ring * 0.7 + frameCount * 0.02) * 0.06;
+
+    stroke(0, 245, 150 + high * 90, (38 + level * 190 + beat * 80) * depthFade);
+    strokeWeight((0.55 + beat * 2.6 + high * 1.2) * depthFade);
+    beginShape();
+
+    for (let i = 0; i <= segments; i++) {
+      const angle = map(i, 0, segments, 0, TWO_PI) + twist * ring;
+      const wave = distortWave(getWaveAt(waveform, i * 5 + ring * 17 + frameCount));
+      const teeth = sin(angle * 8 + frameCount * 0.035 + ring) * (2 + mid * 12);
+      const r = radius + wave * (16 + rayIntensity * 28) + teeth;
+
+      vertex(cos(angle) * r, sin(angle) * r * yScale, z);
+    }
+
+    endShape(CLOSE);
+
+    if (ring % 3 === 0) {
+      stroke(180, 255, 230, (18 + beat * 95) * depthFade);
+      strokeWeight(0.5 + beat * 1.4);
+      rectMode(CENTER);
+      push();
+      translate(0, 0, z);
+      rotateZ(twist * ring);
+      rect(0, 0, radius * 1.55, radius * 0.82);
+      pop();
+    }
+  }
+
+  for (let spoke = 0; spoke < 22; spoke++) {
+    const angle = map(spoke, 0, 22, 0, TWO_PI) + twist;
+    const inner = baseRadius * (0.18 + beat * 0.08);
+    const outer = baseRadius * (2.4 + beat * 0.26);
+    const yScale = 0.54;
+
+    stroke(120, 255, 220, 35 + level * 90 + beat * 85);
+    strokeWeight(0.45 + beat * 1.4);
+    line(
+      cos(angle) * inner,
+      sin(angle) * inner * yScale,
+      40,
+      cos(angle) * outer,
+      sin(angle) * outer * yScale,
+      -tunnelDepth * 0.86
+    );
+  }
+
+  for (let i = 0; i < 42; i++) {
+    const angle = i * 2.399 + frameCount * 0.018;
+    const lane = baseRadius * (0.45 + (i % 7) * 0.22);
+    const z = -((frameCount * (9 + playbackRate * 5) + i * 87) % tunnelDepth);
+    const spark = abs(distortWave(getWaveAt(waveform, i * 23 + frameCount * 1.7)));
+
+    stroke(210, 255, 230, 45 + spark * 150);
+    strokeWeight(1.3 + spark * 4 + beat * 2);
+    point(cos(angle) * lane, sin(angle) * lane * 0.55, z);
+  }
+
+  drawMoireOverlay(waveform, baseRadius, level, bass, mid, high, beat, "tunnel");
+
+  drawingContext.shadowBlur = 0;
+  blendMode(BLEND);
+  pop();
+}
+
+function drawMoireOverlay(waveform, baseRadius, level, bass, mid, high, beat, mode) {
+  push();
+  noFill();
+  blendMode(ADD);
+
+  const radius = baseRadius * (1.25 + beat * 0.18);
+  const lineCount = mode === "sphere" ? 11 : mode === "minimal" ? 18 : 26;
+  const step = radius * 2.15 / lineCount;
+  const drift = frameCount * (0.012 + playbackRate * 0.004);
+  const alpha = 12 + level * 85 + beat * 70;
+  const waveAmp = (8 + mid * 24 + beat * 18) * (mode === "sphere" ? 0.5 : mode === "minimal" ? 0.45 : 1);
+
+  drawingContext.shadowBlur = mode === "minimal" ? 8 : 18;
+  drawingContext.shadowColor = "rgba(130,255,235,0.48)";
+
+  const moireLayers = mode === "sphere" ? 1 : 2;
+  const moireSteps = mode === "sphere" ? 24 : 42;
+
+  for (let layer = 0; layer < moireLayers; layer++) {
+    push();
+    rotateZ((layer === 0 ? 1 : -1) * (0.16 + sin(frameCount * 0.004) * 0.06));
+    rotateY((layer === 0 ? 1 : -1) * (0.08 + beat * 0.08));
+
+    if (mode === "sphere") {
+      stroke(255, 255, 255, alpha * (layer === 0 ? 0.72 : 0.46));
+    } else {
+      stroke(layer === 0 ? 0 : 130, 255, layer === 0 ? 145 + high * 70 : 235, alpha * (layer === 0 ? 0.9 : 0.62));
+    }
+    strokeWeight(mode === "minimal" ? 0.45 + beat * 0.45 : 0.55 + beat * 0.9);
+
+    for (let row = -lineCount; row <= lineCount; row++) {
+      const y = row * step * 0.5;
+      const phase = drift + row * 0.17 + layer * 1.8;
+
+      beginShape();
+      for (let i = -moireSteps; i <= moireSteps; i++) {
+        const x = i * radius / moireSteps;
+        const localWave = distortWave(getWaveAt(waveform, i * 9 + row * 13 + frameCount * 0.8));
+        const wobble = sin(i * 0.28 + phase) * waveAmp + sin(i * 0.06 + phase * 1.7) * waveAmp * 0.42;
+        const z = sin(i * 0.12 + row * 0.08 + drift) * (18 + bass * 28) + localWave;
+
+        vertex(x, y + wobble + localWave * waveAmp * 0.65, z - layer * 24);
+      }
+      endShape();
+    }
+
+    pop();
+  }
+
+  const rings = mode === "sphere" ? 3 : mode === "chaos" ? 9 : 6;
+  for (let ring = 0; ring < rings; ring++) {
+    const ringRadius = radius * (0.32 + ring * 0.12 + beat * 0.025);
+    const ringAlpha = alpha * map(ring, 0, rings - 1, 0.75, 0.18);
+
+    push();
+    rotateX(HALF_PI * 0.45 + ring * 0.08);
+    rotateZ(frameCount * (0.004 + ring * 0.0006));
+    if (mode === "sphere") {
+      stroke(255, 255, 255, ringAlpha * 0.72);
+    } else {
+      stroke(210, 255, 230, ringAlpha);
+    }
+    strokeWeight(0.4 + beat * 0.7);
+    beginShape();
+    const ringSteps = mode === "sphere" ? 90 : 180;
+    for (let i = 0; i <= ringSteps; i++) {
+      const t = map(i, 0, ringSteps, 0, TWO_PI);
+      const ripple = sin(t * (7 + ring) + drift * 2.6) * (2 + high * 7);
+      const r = ringRadius + ripple;
+
+      vertex(cos(t) * r, sin(t) * r * 0.46, sin(t * 2) * 18);
+    }
+    endShape(CLOSE);
+    pop();
+  }
+
+  drawingContext.shadowBlur = 0;
+  pop();
+}
+
+// TikTok-like simplified 3D atom: dense wireframe rings + radial spokes + glowing core
+// Sphere-style TikTok-like atom: dense spherical wireframe that responds to audio
+function drawTikTokSphere(waveform, baseRadius, pulse, bass, mid, high, level) {
+  push();
+  noFill();
+
+  const beat = constrain(roomHeartbeat + bass * 0.34 + level * 1.2, 0, 1);
+  const radius = baseRadius * (1.08 + beat * 0.1) + pulse * 0.08;
+  const rings = 16 + floor(coreDensity * 7);
+  const steps = 84;
+  const lobeCount = 9;
+  const phase = frameCount * 0.012;
+
+  drawingContext.shadowBlur = 22 + beat * 24;
+  drawingContext.shadowColor = "rgba(255,255,255,0.72)";
+
+  rotateZ(frameCount * 0.002);
+  rotateY(sin(frameCount * 0.004) * 0.12);
+
+  for (let pass = 0; pass < 2; pass++) {
+    push();
+    rotateZ(pass * 0.18 + frameCount * (0.0018 + pass * 0.001));
+    rotateX(pass * 0.22 - 0.18);
+
+    for (let ring = 0; ring < rings; ring++) {
+      const ringRatio = map(ring, 0, rings - 1, -1, 1);
+      const band = sqrt(max(0, 1 - ringRatio * ringRatio));
+      const y = ringRatio * radius * (0.78 + pass * 0.035);
+      const rowRadius = radius * band;
+      const rowAlpha = (24 + band * 120 + level * 135 + beat * 70) * (1 - pass * 0.23);
+
+      stroke(245, 255, 250, rowAlpha);
+      strokeWeight(0.34 + band * 0.78 + beat * 0.85);
+      beginShape();
+
+      for (let i = 0; i <= steps; i++) {
+        const t = map(i, 0, steps, 0, TWO_PI);
+        const wave = distortWave(getWaveAt(waveform, i * 4 + ring * 19 + pass * 61));
+        const flower = sin(t * lobeCount + phase + ring * 0.18 + pass) * (10 + mid * 28 + beat * 18);
+        const lace = sin(t * 17 - phase * 1.4 + ring * 0.31) * (2.5 + high * 10);
+        const r = rowRadius + flower * band + lace + wave * (8 + rayIntensity * 13);
+        const z = sin(t * 2 + ring * 0.11 + pass) * (18 + high * 26) * band + wave * 22;
+
+        vertex(cos(t) * r, y + sin(t * 3 + phase) * beat * 8, sin(t) * r * 0.58 + z);
+      }
+
+      endShape(CLOSE);
+    }
+
+    pop();
+  }
+
+  for (let family = 0; family < 2; family++) {
+    const diagonals = 18;
+
+    push();
+    rotateZ(family === 0 ? 0.55 : -0.55);
+    rotateY(family === 0 ? 0.28 : -0.28);
+
+    stroke(255, 255, 255, 18 + level * 55 + beat * 40);
+    strokeWeight(0.28 + beat * 0.35);
+
+    for (let lineIndex = -diagonals; lineIndex <= diagonals; lineIndex++) {
+      beginShape();
+      for (let i = -32; i <= 32; i++) {
+        const x = i * radius / 34;
+        const y = lineIndex * radius / diagonals * 0.66 + sin(i * 0.15 + phase + lineIndex) * (5 + beat * 8);
+        const mask = 1 - constrain((x * x + y * y) / (radius * radius * 1.04), 0, 1);
+
+        if (mask <= 0.02) {
+          endShape();
+          beginShape();
+          continue;
+        }
+
+        const z = sin(i * 0.2 + lineIndex * 0.21 + phase) * 42 * mask;
+        vertex(x, y, z);
+      }
+      endShape();
+    }
+
+    pop();
+  }
+
+  for (let outline = 0; outline < 4; outline++) {
+    const outlineRadius = radius * (0.96 + outline * 0.024);
+
+    stroke(255, 255, 255, 60 + beat * 80 - outline * 5);
+    strokeWeight(0.75 + beat * 1.8);
+    beginShape();
+    for (let i = 0; i <= 150; i++) {
+      const t = map(i, 0, 150, 0, TWO_PI);
+      const wave = distortWave(getWaveAt(waveform, i * 5 + outline * 43 + frameCount));
+      const edge = sin(t * lobeCount + phase * 1.3 + outline) * (18 + beat * 24);
+      const micro = sin(t * 31 - phase * 2) * (3 + high * 8);
+      const r = outlineRadius + edge + micro + wave * 16;
+
+      vertex(cos(t) * r, sin(t) * r * 0.86, sin(t * 2 + outline) * 34);
+    }
+    endShape(CLOSE);
+  }
+
+  noStroke();
+  fill(255, 255, 255, 18 + beat * 32);
+  circle(0, 0, radius * 0.46);
+  fill(255, 255, 255, 180 + beat * 45);
+  circle(0, 0, 8 + beat * 18 + level * 12);
+
+  drawMoireOverlay(waveform, baseRadius, level, bass, mid, high, beat, "sphere");
+
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowColor = "transparent";
+  pop();
+}
+
+// Geometric faceted atom: lower-poly spherical shell with quantized radius to create flat facets
+function drawGeometricAtom(waveform, baseRadius, pulse, bass, mid, high, level) {
+  push();
+  noFill();
+  strokeJoin(MITER);
+
+  const beat = constrain(roomHeartbeat + bass * 0.45 + high * 0.22, 0, 1);
+  const shardCount = 58 + floor(rayIntensity * 34);
+
+  drawingContext.shadowBlur = 30 + beat * 26;
+  drawingContext.shadowColor = "rgba(0,255,112,0.92)";
+
+  rotateX(frameCount * 0.004 + beat * 0.12);
+  rotateY(frameCount * 0.009);
+  rotateZ(sin(frameCount * 0.01) * 0.18);
+
+  for (let i = 0; i < shardCount; i++) {
+    const seed = i * 12.989;
+    const angle = i * 2.399963 + frameCount * (0.007 + (i % 5) * 0.0008);
+    const tilt = sin(seed * 0.73) * HALF_PI;
+    const wave = distortWave(getWaveAt(waveform, i * 11 + frameCount * 1.6));
+    const spark = abs(distortWave(getWaveAt(waveform, i * 31 + frameCount * 2.2)));
+    const radius = baseRadius * (0.35 + (i % 9) * 0.105) + wave * 56 + beat * 80;
+    const x = cos(angle) * radius;
+    const y = sin(angle * 1.31) * radius * 0.64;
+    const z = sin(angle) * radius * 0.72 + cos(i) * 50;
+    const shardSize = 12 + spark * 42 + beat * 28;
+
+    push();
+    translate(x, y, z);
+    rotateX(tilt + frameCount * 0.012);
+    rotateY(angle + wave * 0.8);
+    rotateZ(seed + frameCount * 0.018);
+
+    stroke(0, 255, 112 + high * 90, 42 + spark * 145 + level * 90);
+    strokeWeight(0.6 + spark * 1.8 + beat * 1.2);
+    beginShape();
+    vertex(-shardSize * 0.55, -shardSize * 0.25, 0);
+    vertex(shardSize * 0.62, -shardSize * 0.42, shardSize * 0.18);
+    vertex(shardSize * 0.24, shardSize * 0.68, -shardSize * 0.18);
+    endShape(CLOSE);
+
+    if (spark > 0.35 || i % 7 === 0) {
+      stroke(210, 255, 230, 36 + spark * 120);
+      line(0, 0, 0, -x * 0.18, -y * 0.18, -z * 0.18);
+    }
+
+    pop();
+  }
+
+  for (let band = 0; band < 5; band++) {
+    push();
+    rotateX((band / 5) * PI + frameCount * 0.006);
+    rotateY(frameCount * (0.01 + band * 0.002));
+
+    stroke(band % 2 ? 130 : 0, 255, band % 2 ? 235 : 112, 52 + beat * 145);
+    strokeWeight(0.8 + beat * 2.5);
+    beginShape();
+
+    for (let i = 0; i <= 180; i += 2) {
+      if (i % 28 > 18) {
+        endShape();
+        beginShape();
+        continue;
+      }
+
+      const t = map(i, 0, 180, 0, TWO_PI);
+      const wave = distortWave(getWaveAt(waveform, i * 4 + band * 53));
+      const r = baseRadius * (0.8 + band * 0.09) + wave * (28 + rayIntensity * 22) + beat * 48;
+
+      vertex(cos(t) * r, sin(t) * r * (0.32 + band * 0.035), sin(t * 2) * r * 0.18);
+    }
+
+    endShape();
+    pop();
+  }
+
+  noStroke();
+  fill(0, 255, 112, 28 + beat * 70);
+  circle(0, 0, baseRadius * (0.34 + beat * 0.45));
+  fill(230, 255, 235, 190 + beat * 55);
+  circle(0, 0, 12 + beat * 38 + level * 22);
+
+  drawMoireOverlay(waveform, baseRadius, level, bass, mid, high, beat, "chaos");
+
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowColor = "transparent";
+  pop();
+}
+
+function drawMinimalAtom(waveform, baseRadius, pulse, bass, mid, high, level) {
+  push();
+  noFill();
+
+  const beat = constrain(roomHeartbeat + bass * 0.4 + level * 1.1, 0, 1);
+  const radius = baseRadius * (0.96 + beat * 0.12);
+  const latitudes = 11 + floor(coreDensity * 6);
+  const longitudes = 18 + floor(rayIntensity * 7);
+  const time = frameCount * 0.011;
+  const grid = [];
+
+  drawingContext.shadowBlur = 20 + beat * 24;
+  drawingContext.shadowColor = "rgba(255,70,48,0.74)";
+
+  rotateX(-0.18 + sin(frameCount * 0.006) * 0.1);
+  rotateY(frameCount * 0.006);
+  rotateZ(sin(frameCount * 0.005) * 0.08);
+
+  for (let lat = 0; lat <= latitudes; lat++) {
+    const v = map(lat, 0, latitudes, -HALF_PI, HALF_PI);
+    const row = [];
+
+    for (let lon = 0; lon <= longitudes; lon++) {
+      const u = map(lon, 0, longitudes, 0, TWO_PI);
+      const wave = distortWave(getWaveAt(waveform, lon * 9 + lat * 31 + frameCount * 1.15));
+      const noisy = noise(
+        cos(u) * 1.25 + 4,
+        sin(u) * 1.25 + 4,
+        lat * 0.18 + time
+      );
+      const lobes = sin(u * 5 + time * 1.7) * cos(v * 3.2 + time) + sin(u * 9 - v * 4 + time * 0.8) * 0.45;
+      const distortion = (noisy - 0.5) * (95 + beat * 120) + lobes * (24 + mid * 48) + wave * (35 + high * 42);
+      const r = radius + distortion;
+      const squash = 0.78 + sin(u * 3 + time) * 0.08;
+
+      row.push({
+        x: r * cos(v) * cos(u) * (1.04 + beat * 0.04),
+        y: r * sin(v) * squash,
+        z: r * cos(v) * sin(u) * (0.72 + beat * 0.1)
+      });
+    }
+
+    grid.push(row);
+  }
+
+  for (let lat = 0; lat < latitudes; lat++) {
+    for (let lon = 0; lon < longitudes; lon++) {
+      const a = grid[lat][lon];
+      const b = grid[lat][lon + 1];
+      const c = grid[lat + 1][lon + 1];
+      const d = grid[lat + 1][lon];
+      const edgeFade = 1 - abs((lat / latitudes) - 0.5);
+      const spark = abs(distortWave(getWaveAt(waveform, lon * 17 + lat * 43 + frameCount * 2)));
+      const alpha = 44 + edgeFade * 92 + beat * 95 + spark * 80;
+
+      stroke(255, 72 + high * 90, 48, alpha);
+      strokeWeight(0.45 + spark * 0.85 + beat * 0.8);
+
+      line(a.x, a.y, a.z, b.x, b.y, b.z);
+      line(b.x, b.y, b.z, c.x, c.y, c.z);
+      line(c.x, c.y, c.z, d.x, d.y, d.z);
+      line(d.x, d.y, d.z, a.x, a.y, a.z);
+
+      if ((lat + lon) % 2 === 0) {
+        line(a.x, a.y, a.z, c.x, c.y, c.z);
+      } else {
+        line(b.x, b.y, b.z, d.x, d.y, d.z);
+      }
+    }
+  }
+
+  stroke(255, 118, 62, 60 + beat * 120);
+  strokeWeight(1.1 + beat * 1.8);
+  for (let path = 0; path < 7; path++) {
+    beginShape();
+    for (let i = 0; i <= 160; i++) {
+      const u = map(i, 0, 160, 0, TWO_PI);
+      const lat = floor(map((sin(u * 2 + path) + 1) * 0.5, 0, 1, 1, latitudes - 1));
+      const lon = floor(map(i % 160, 0, 160, 0, longitudes - 1));
+      const p = grid[lat][lon];
+
+      vertex(p.x, p.y, p.z);
+    }
+    endShape();
+  }
+
+  for (let spike = 0; spike < 26; spike++) {
+    const lat = 1 + (spike * 5) % (latitudes - 1);
+    const lon = (spike * 7) % longitudes;
+    const p = grid[lat][lon];
+    const length = 0.16 + beat * 0.18 + abs(distortWave(getWaveAt(waveform, spike * 71 + frameCount))) * 0.12;
+
+    stroke(255, 142, 82, 28 + beat * 72);
+    strokeWeight(0.45 + beat * 0.8);
+    line(p.x, p.y, p.z, p.x * (1 + length), p.y * (1 + length), p.z * (1 + length));
+  }
+
+  noStroke();
+  fill(255, 64, 42, 16 + beat * 40);
+  circle(0, 0, radius * (0.42 + beat * 0.08));
+
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowColor = "transparent";
   pop();
 }
 
@@ -716,6 +1623,7 @@ function drawVisualControls() {
   line(panel.x + panel.width - 34, panel.y + 8, panel.x + panel.width - 10, panel.y + 8);
 
   drawModeButtons(controls.mode);
+  drawStyleButtons(controls.style);
   drawSliderControl(controls.distortion, distortionAmount, 0.5, 5);
   drawSliderControl(controls.size, visualSize, 0.65, 1.7);
   drawSliderControl(controls.rays, rayIntensity, 0.45, 2.4);
@@ -744,6 +1652,31 @@ function drawModeButtons(bounds) {
     textAlign(CENTER, CENTER);
     textSize(9);
     text(getModeLabel(DISTORTION_MODES[i]), x + buttonWidth / 2, bounds.y + bounds.height / 2);
+  }
+}
+
+function drawStyleButtons(bounds) {
+  const buttonGap = 6;
+  const buttonWidth = (bounds.width - buttonGap * (VISUAL_STYLES.length - 1)) / VISUAL_STYLES.length;
+
+  for (let i = 0; i < VISUAL_STYLES.length; i++) {
+    const x = bounds.x + i * (buttonWidth + buttonGap);
+    const active = i === visualStyleIndex;
+
+    noStroke();
+    fill(active ? color(0, 255, 112, 205) : color(0, 20, 16, 180));
+    rect(x, bounds.y, buttonWidth, bounds.height);
+
+    noFill();
+    stroke(active ? color(210, 255, 225, 180) : color(0, 255, 112, 62));
+    strokeWeight(1);
+    rect(x, bounds.y, buttonWidth, bounds.height);
+
+    fill(active ? color(0, 18, 9) : color(200, 255, 230, 180));
+    noStroke();
+    textAlign(CENTER, CENTER);
+    textSize(10);
+    text(VISUAL_STYLES[i], x + buttonWidth / 2, bounds.y + bounds.height / 2 - 1);
   }
 }
 
@@ -807,7 +1740,7 @@ function drawStatus() {
   text(getDistortionText(), width / 2, 56);
 
   if (songReady && !loadError) {
-    text(formatTime(song.currentTime()) + " / " + formatTime(song.duration()), width / 2, height - 24);
+    text(formatTime(getPlaybackTime()) + " / " + formatTime(song.duration()), width / 2, height - 24);
   }
 }
 
@@ -837,14 +1770,27 @@ function toggleSong() {
   }
 
   userStartAudio();
-  song.isPlaying() ? song.pause() : song.play();
+
+  if (song.isPlaying()) {
+    pendingSeekTime = song.currentTime();
+    song.pause();
+  } else {
+    const cueTime = constrain(pendingSeekTime, 0, max(0, song.duration() - 0.01));
+
+    if (song.isPaused && song.isPaused()) {
+      song.pauseTime = cueTime;
+      song._pauseTime = cueTime;
+    }
+
+    song.play(0, playbackRate, undefined, cueTime);
+  }
 }
 
 function mousePressed() {
   pointerDownX = mouseX;
   pointerDownY = mouseY;
   pointerMoved = false;
-  pointerStartedOnControl = isPointerOnControl(mouseX, mouseY);
+  pointerStartedOnControl = isPointerOnControl(mouseX, mouseY) || isPointerOnDOMUI(mouseX, mouseY);
 
   if (isPointerOnTimeline(mouseX, mouseY)) {
     seekSong(mouseX);
@@ -862,6 +1808,7 @@ function mousePressed() {
 
   if (activeVisualControl) {
     updateVisualControl(activeVisualControl, mouseX);
+    return; // Evitar que el clic en controles active toggleSong
   }
 }
 
@@ -870,7 +1817,7 @@ function mouseDragged() {
     pointerMoved = true;
   }
 
-  if (!pointerStartedOnControl && !isSeeking && !isChangingSpeed) {
+  if (!pointerStartedOnControl && !isPointerOnDOMUI(mouseX, mouseY) && !isSeeking && !isChangingSpeed) {
     rotateSphereWithPointer(movedX, movedY);
   }
 
@@ -888,8 +1835,10 @@ function mouseDragged() {
 }
 
 function mouseReleased() {
-  if (!pointerStartedOnControl && !pointerMoved) {
-    toggleSong();
+  if (!pointerStartedOnControl && !pointerMoved && !isSeeking && !isChangingSpeed && !activeVisualControl) {
+    if (isPointerOverCanvas()) {
+      toggleSong();
+    }
   }
 
   isSeeking = false;
@@ -929,7 +1878,7 @@ function touchMoved() {
     pointerMoved = true;
   }
 
-  if (!pointerStartedOnControl && !isSeeking && !isChangingSpeed) {
+  if (!pointerStartedOnControl && !isPointerOnDOMUI(mouseX, mouseY) && !isSeeking && !isChangingSpeed) {
     rotateSphereWithPointer(movedX, movedY);
   }
 
@@ -949,8 +1898,10 @@ function touchMoved() {
 }
 
 function touchEnded() {
-  if (!pointerStartedOnControl && !pointerMoved) {
-    toggleSong();
+  if (!pointerStartedOnControl && !pointerMoved && !isSeeking && !isChangingSpeed && !activeVisualControl) {
+    if (isPointerOverCanvas()) {
+      toggleSong();
+    }
   }
 
   isSeeking = false;
@@ -959,8 +1910,13 @@ function touchEnded() {
 }
 
 function keyPressed() {
-  if (key === " ") {
-    toggleSong();
+  console.log('keyPressed() called - key:', key, 'keyCode:', keyCode, 'focused:', document.activeElement && document.activeElement.tagName);
+  if (key === " " || keyCode === 32) {
+    if (!isFocusOnUI()) {
+      toggleSong();
+    } else {
+      console.log('Space pressed but focus is on UI, ignoring toggle');
+    }
   }
 
   if (key === "d" || key === "D") {
@@ -996,7 +1952,24 @@ function seekSong(pointerX) {
 
   const timeline = getTimelineBounds();
   const progress = constrain((pointerX - timeline.x) / timeline.width, 0, 1);
-  song.jump(song.duration() * progress);
+  seekSongToProgress(progress);
+}
+
+function seekSongToProgress(progress) {
+  if (!songReady || loadError || !song || song.duration() === 0) {
+    return;
+  }
+
+  const seekTime = constrain(song.duration() * progress, 0, max(0, song.duration() - 0.01));
+  pendingSeekTime = seekTime;
+
+  if (song.isPlaying()) {
+    song.jump(seekTime);
+  } else {
+    song.pauseTime = seekTime;
+    song._pauseTime = seekTime;
+  }
+
   history = [];
 }
 
@@ -1023,6 +1996,31 @@ function changeDistortionAmount(delta) {
   history = [];
 }
 
+function applyScenePreset(index) {
+  scenePresetIndex = constrain(index, 0, SCENE_PRESETS.length - 1);
+  visualStyleIndex = scenePresetIndex;
+
+  if (scenePresetIndex === 0) {
+    distortionModeIndex = 3;
+    distortionAmount = 1.8;
+    visualSize = 1.02;
+    rayIntensity = 1.18;
+    coreDensity = 0.58;
+    roomTempoSensitivity = 1;
+  } else {
+    distortionModeIndex = 0;
+    distortionAmount = 0.95;
+    visualSize = 1.05;
+    rayIntensity = 1.35;
+    coreDensity = 0.68;
+    roomTempoSensitivity = 1.05;
+  }
+
+  updateAudioDistortion();
+  syncDOMControls();
+  history = [];
+}
+
 function updateVisualControl(controlName, pointerX) {
   if (controlName === "mode") {
     const modeBounds = getVisualControls().mode;
@@ -1032,6 +2030,18 @@ function updateVisualControl(controlName, pointerX) {
     if (nextMode !== distortionModeIndex) {
       distortionModeIndex = nextMode;
       updateAudioDistortion();
+    }
+
+    return;
+  }
+
+  if (controlName === "style") {
+    const bounds = getVisualControls().style;
+    const buttonWidth = bounds.width / VISUAL_STYLES.length;
+    const nextStyle = constrain(floor((pointerX - bounds.x) / buttonWidth), 0, VISUAL_STYLES.length - 1);
+
+    if (nextStyle !== scenePresetIndex) {
+      applyScenePreset(nextStyle);
     }
 
     return;
@@ -1141,7 +2151,19 @@ function getSongProgress() {
     return 0;
   }
 
-  return constrain(song.currentTime() / song.duration(), 0, 1);
+  return constrain(getPlaybackTime() / song.duration(), 0, 1);
+}
+
+function getPlaybackTime() {
+  if (!songReady || loadError || !song) {
+    return 0;
+  }
+
+  if (song.isPlaying()) {
+    pendingSeekTime = song.currentTime();
+  }
+
+  return constrain(pendingSeekTime, 0, song.duration ? song.duration() : pendingSeekTime);
 }
 
 function getTimelineBounds() {
@@ -1181,6 +2203,12 @@ function getVisualControls() {
   const gap = 45;
 
   return {
+    style: {
+      x: panel.x + 14,
+      y: panel.y + 32,
+      width: 200,
+      height: 20
+    },
     mode: {
       x,
       y: panel.y + 32,
@@ -1245,6 +2273,10 @@ function isPointerOnControl(pointerX, pointerY) {
 function getVisualControlAt(pointerX, pointerY) {
   const controls = getVisualControls();
 
+  if (isPointerInBounds(pointerX, pointerY, controls.style, 5)) {
+    return "style";
+  }
+
   if (isPointerInBounds(pointerX, pointerY, controls.mode, 5)) {
     return "mode";
   }
@@ -1308,6 +2340,48 @@ function windowResized() {
   let container = document.querySelector('.canvas-wrapper');
   if (container) {
     resizeCanvas(container.offsetWidth, container.offsetHeight);
+  }
+}
+
+function isPointerOverCanvas() {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) return false;
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left + Math.max(0, Math.min(rect.width, mouseX));
+  const cy = rect.top + Math.max(0, Math.min(rect.height, mouseY));
+  const el = document.elementFromPoint(cx, cy);
+  let node = el;
+  while (node) {
+    if (node === canvas) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function isFocusOnUI() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') return true;
+  if (active.closest && active.closest('.info-panel')) return true;
+  if (active.closest && active.closest('.file-drop-section')) return true;
+  return false;
+}
+
+function isPointerOnDOMUI(pointerX, pointerY) {
+  try {
+    const canvas = document.querySelector('canvas');
+    const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+    const x = (typeof pointerX === 'number' ? pointerX : mouseX) + rect.left;
+    const y = (typeof pointerY === 'number' ? pointerY : mouseY) + rect.top;
+    const el = document.elementFromPoint(x, y);
+    if (!el) return false;
+    if (el.closest && (el.closest('.info-panel') || el.closest('.file-drop-section'))) return true;
+    const tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON' || el.classList.contains('slider')) return true;
+    return false;
+  } catch (err) {
+    return false;
   }
 }
 

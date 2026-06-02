@@ -32,18 +32,17 @@ body::before {
   left: 0;
   width: 100%;
   height: 100%;
-  background-image: 
-    linear-gradient(0deg, transparent 24%, rgba(25, 255, 135, 0.08) 25%, rgba(25, 255, 135, 0.08) 26%, transparent 27%, transparent 74%, rgba(25, 255, 135, 0.08) 75%, rgba(25, 255, 135, 0.08) 76%, transparent 77%, transparent),
-    linear-gradient(90deg, transparent 24%, rgba(25, 255, 135, 0.08) 25%, rgba(25, 255, 135, 0.08) 26%, transparent 27%, transparent 74%, rgba(25, 255, 135, 0.08) 75%, rgba(25, 255, 135, 0.08) 76%, transparent 77%, transparent);
-  background-size: 60px 60px;
+  /* removed green grid overlays to keep background pure black */
+  background: transparent;
+  background-color: transparent;
   pointer-events: none;
-  z-index: 0;
-  animation: grid-drift 20s linear infinite;
+  z-index: 1;
+  animation: grid-drift 40s linear infinite;
 }
 
 @keyframes grid-drift {
-  0% { background-position: 0 0; }
-  100% { background-position: 60px 60px; }
+  0% { background-position: 0 0, 0 0, 0 0, 0 0; }
+  100% { background-position: 50px 50px, 50px 50px, 0 0, 0 0; }
 }
 
 /* ==========================================
@@ -52,12 +51,12 @@ body::before {
 body {
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #000000 0%, #001903 100%);
+  background: #000000;
   position: relative;
 }
 
 .header {
-  background: rgba(0, 25, 3, 0.95);
+  background: rgba(0, 0, 0, 0.95);
   backdrop-filter: blur(10px);
   padding: 1rem;
   border-bottom: 2px solid #19ff87;
@@ -88,13 +87,13 @@ body {
   gap: 0;
   overflow: hidden;
   position: relative;
-  z-index: 1;
+  z-index: 10;
 }
 
 .canvas-wrapper {
   flex: 1;
   position: relative;
-  background: linear-gradient(135deg, #000000 0%, #001903 50%, #000000 100%);
+  background: #000000;
   overflow: hidden;
   z-index: 1;
 }
@@ -112,7 +111,7 @@ body {
 
 .info-panel {
   width: 250px;
-  background: rgba(0, 25, 3, 0.95);
+  background: rgba(0, 0, 0, 0.95);
   backdrop-filter: blur(8px);
   padding: 1.5rem;
   border-left: 2px solid #19ff87;
@@ -156,6 +155,54 @@ body {
   border-top: 1px solid rgba(25, 255, 135, 0.3);
 }
 
+.file-drop-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(25, 255, 135, 0.3);
+}
+
+.file-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 112px;
+  padding: 1rem;
+  border: 2px dashed rgba(25, 255, 135, 0.5);
+  border-radius: 14px;
+  background: rgba(0, 25, 3, 0.35);
+  color: #82ffeb;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.file-dropzone:hover,
+.file-dropzone:focus,
+.file-dropzone--active {
+  border-color: #82ffeb;
+  background: rgba(25, 255, 135, 0.12);
+  box-shadow: 0 0 18px rgba(25, 255, 135, 0.22);
+}
+
+.file-dropzone p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.dropzone-hint {
+  color: #19ff87;
+  font-size: 0.84rem;
+}
+
+.dropzone-feedback {
+  margin-top: 0.85rem;
+  color: #19ff87;
+  font-size: 0.88rem;
+}
+
 .status-info h2,
 .params-info h2 {
   color: #19ff87;
@@ -167,6 +214,55 @@ body {
 }
 
 /* Estilos para sliders */
+.preset-control {
+  margin-bottom: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.preset-control label {
+  color: #82ffeb;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.preset-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.preset-button {
+  min-height: 34px;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid rgba(25, 255, 135, 0.48);
+  background: rgba(0, 25, 10, 0.72);
+  color: #82ffeb;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.preset-button:hover,
+.preset-button:focus {
+  border-color: #82ffeb;
+  background: rgba(25, 255, 135, 0.16);
+  outline: none;
+}
+
+.preset-button--active {
+  background: #19ff87;
+  border-color: #d7ffe5;
+  color: #001903;
+  box-shadow: 0 0 14px rgba(25, 255, 135, 0.42);
+}
+
 .param-slider {
   margin-bottom: 1.2rem;
   display: flex;
@@ -254,7 +350,7 @@ body {
 }
 
 .footer {
-  background: rgba(0, 25, 3, 0.95);
+  background: rgba(0, 0, 0, 0.95);
   border-top: 2px solid #19ff87;
   padding: 1rem;
   text-align: center;
@@ -277,7 +373,7 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 25, 3, 0.5);
+  background: rgba(0, 0, 0, 0.5);
 }
 
 ::-webkit-scrollbar-thumb {
